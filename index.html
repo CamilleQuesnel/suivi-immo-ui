@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src https://api.github.com; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Suivi immo</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Suivi immo</h1>
+  <button id="btn-refresh" title="Recharger">↻</button>
+  <button id="btn-settings" title="Réglages">⚙</button>
+</header>
+<main>
+  <section id="setup" hidden>
+    <h2>Connexion</h2>
+    <p>Cette page ne contient aucune donnée. Elle lit et écrit dans ton dépôt privé avec un jeton enregistré uniquement dans <strong>ce</strong> navigateur.</p>
+    <label>Dépôt privé <input id="in-repo" placeholder="ton-pseudo/suivi-immo" autocomplete="off" spellcheck="false"></label>
+    <label>Jeton GitHub (fine-grained, ce dépôt seulement)
+      <input id="in-token" type="password" placeholder="github_pat_…" autocomplete="off" spellcheck="false"></label>
+    <div class="row"><button id="btn-save" class="primary">Enregistrer</button><button id="btn-forget">Oublier ce navigateur</button></div>
+  </section>
+
+  <section id="app" hidden>
+    <form id="add-form" class="row">
+      <input id="in-url" type="url" placeholder="Coller le lien d'une annonce à suivre…" required autocomplete="off">
+      <button class="primary">Ajouter</button>
+    </form>
+    <div id="msg" role="status"></div>
+    <div id="stats" class="stats"></div>
+    <nav id="tabs">
+      <button data-tab="sel" class="on">Ma sélection <b id="c-sel"></b></button>
+      <button data-tab="new">Trouvées <b id="c-new"></b></button>
+      <button data-tab="gone">Disparues <b id="c-gone"></b></button>
+    </nav>
+    <div id="list"></div>
+    <p id="foot"></p>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
