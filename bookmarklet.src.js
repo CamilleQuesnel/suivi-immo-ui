@@ -1,10 +1,17 @@
 // Source lisible du favori « 📥 Suivi immo » (la version minifiée est dans index.html).
 // - Leboncoin : page de résultats ou annonce (lit __NEXT_DATA__ déjà chargé par la page).
 // - Bien'ici  : page de résultats ou annonce (relit les données JSON que la page a chargées).
+// - Notaires (immobilier.notaires.fr) : page de résultats ou annonce (API publique du site).
 // - Autres sites : page d'une annonce (données structurées JSON-LD, og:image, texte de la page).
 (async () => {
   const U = "https://camillequesnel.github.io/suivi-immo-ui/";
   const H = location.hostname;
+  // Ouvre (ou retrouve) l'onglet Suivi immo tout de suite, pendant le clic : sinon le bloqueur de fenêtres
+  // de Brave/Chrome peut refuser l'ouverture une fois les données chargées.
+  const W = window.open("", "suiviimmo");
+  let fresh = false;
+  try { fresh = !!W && W.location.href === "about:blank"; } catch (e) { /* onglet Suivi immo déjà ouvert */ }
+  const fail = (m) => { if (fresh) W.close(); alert(m); };
   const num = (v) => { const n = parseFloat(String(v == null ? "" : v).replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : null; };
   const day = (s) => (s || "").slice(0, 10);
   let ads = [];
@@ -12,7 +19,7 @@
   if (/leboncoin\.fr$/.test(H)) {
     let d;
     try { d = JSON.parse(document.getElementById("__NEXT_DATA__").textContent); }
-    catch (e) { return alert("Données Leboncoin introuvables sur cette page (recharge-la puis réessaie)."); }
+    catch (e) { return fail("Données Leboncoin introuvables sur cette page (recharge-la puis réessaie)."); }
     const found = [], seen = new Set();
     const walk = (o, k) => {
       if (!o || typeof o !== "object" || k > 14) return;
@@ -57,11 +64,44 @@
         ads = [conv(a)];
       } else {
         const res = performance.getEntriesByType("resource").map((x) => x.name).filter((n) => /\/realEstateAds\.json\?/.test(n));
-        if (!res.length) return alert("Attends que les annonces soient affichées, puis reclique.");
+        if (!res.length) return fail("Attends que les annonces soient affichées, puis reclique.");
         const j = await fetch(res[res.length - 1]).then((r) => r.json());
         ads = (j.realEstateAds || []).map(conv);
       }
-    } catch (e) { return alert("Impossible de lire les données Bien'ici sur cette page."); }
+    } catch (e) { return fail("Impossible de lire les données Bien'ici sur cette page."); }
+  } else if (/immobilier\.notaires\.fr$/.test(H)) {
+    const API = "/pub-services/inotr-www-annonces/v1/annonces";
+    const TYPES = { MAI: "Maison", APP: "Appartement", TER: "Terrain", IMM: "Immeuble" };
+    const conv = (id, j, r) => {
+      const v = (j && j.vente) || {}, bien = (j && j.bien) || {};
+      const b = Object.values(bien).find((x) => x && typeof x === "object" && "nbPieces" in x) || {};
+      const ds = (v.descriptions || []).find((x) => x.langue === "fr") || {};
+      const ph = (v.multimedias || []).filter((x) => /^image/.test(x.type || "image")).map((x) => x.urlHighestResolution || (x.vga && x.vga.url)).filter(Boolean);
+      r = r || {};
+      const cls = (c) => (/^[A-G]$/.test(c || "") ? c : null);
+      return {
+        src: "Notaires", id: "no:" + id, t: [TYPES[b.typeBien || r.typeBien] || "Bien", (b.nbPieces || r.nbPieces) && (b.nbPieces || r.nbPieces) + " pièces", b.communeNom || r.communeNom].filter(Boolean).join(" "),
+        u: r.urlDetailAnnonceFr || location.origin + location.pathname,
+        p: num(r.prixTotal) || (num(v.prix) ? num(v.prix) + (num(v.emoluments) || 0) : null),
+        s: num(b.surfaceHabitable || r.surface), land: num(b.surfaceTerrain || r.surfaceTerrain),
+        r: num(b.nbPieces || r.nbPieces), b: num(b.nbChambres || r.nbChambres), type: TYPES[b.typeBien || r.typeBien] || null,
+        dpe: cls(b.consommationClasse), ges: cls(b.emissionGesClasse), city: b.communeNom || r.communeNom, zip: b.codePostal || r.codePostal,
+        img: (ph.length ? ph : [r.urlPhotoPrincipale]).filter(Boolean).slice(0, 6),
+        d: (ds.descLongue || ds.descCourte || r.descriptionFr || "").slice(0, 1500), date: day(v.dateCreation || r.dateCreation), pro: true,
+        garden: b.jardin === "OUI",
+      };
+    };
+    const one = (id) => fetch(API + "/" + id).then((r) => r.json()).catch(() => null);
+    try {
+      const m = location.pathname.match(/\/annonce-immo\/.*\/(\d+)\/?$/);
+      if (m) ads = [conv(m[1], await one(m[1]))];
+      else {
+        const res = performance.getEntriesByType("resource").map((x) => x.name).filter((n) => /inotr-www-annonces\/v1\/annonces\?/.test(n));
+        if (!res.length) return fail("Attends que les annonces soient affichées, puis reclique.");
+        const list = (await fetch(res[res.length - 1]).then((r) => r.json())).annonceResumeDto || [];
+        ads = await Promise.all(list.map(async (r) => conv(r.annonceId, await one(r.annonceId), r)));
+      }
+    } catch (e) { return fail("Impossible de lire les données Notaires sur cette page."); }
   } else {
     // Autre site : une annonce à la fois.
     const ld = [];
@@ -94,7 +134,8 @@
     }];
   }
 
-  if (!ads.length) return alert("Aucune annonce trouvée sur cette page.");
+  if (!ads.length) return fail("Aucune annonce trouvée sur cette page.");
   const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(ads)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  window.open(U + "#lbc=" + b64, "suiviimmo");
+  const url = U + "#lbc=" + b64;
+  if (W) W.location.href = url; else window.open(url, "suiviimmo");
 })();

@@ -41,6 +41,7 @@ const isLbc = (u) => /leboncoin\.fr\//.test(u || "");
 function lbcId(u) {
   let m = /leboncoin\.fr\/.*?(\d{9,12})/.exec(u || ""); if (m) return m[1];
   m = /bienici\.com\/annonce\/(?:[^?#]*\/)?([^/?#]+)/.exec(u || ""); if (m) return "bi:" + decodeURIComponent(m[1]);
+  m = /immobilier\.notaires\.fr\/.*?annonce-immo\/.*?\/(\d+)\/?(?:[?#]|$)/.exec(u || ""); if (m) return "no:" + m[1];
   try { const x = new URL(u); return "u:" + x.hostname.replace(/^www\./, "") + x.pathname.replace(/\/$/, ""); } catch (e) { return null; }
 }
 function decodeLbc(b64) {
@@ -48,7 +49,7 @@ function decodeLbc(b64) {
   const bin = atob(s + "===".slice((s.length + 3) % 4));
   const ads = JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))));
   if (!Array.isArray(ads)) throw new Error("format");
-  return ads.filter((a) => a && /^(\d{6,14}|bi:[\w.-]{2,100}|u:[^\s]{3,400})$/.test(String(a.id))).map((a) => ({
+  return ads.filter((a) => a && /^(\d{6,14}|bi:[\w.-]{2,100}|no:\d{3,12}|u:[^\s]{3,400})$/.test(String(a.id))).map((a) => ({
     id: String(a.id), src: String(a.src || "").slice(0, 40), t: String(a.t || "").slice(0, 200), u: /^https:\/\/\S+$/.test(a.u || "") ? a.u : "",
     p: +a.p || null, s: +a.s || null, land: +a.land || null, r: +a.r || null, b: +a.b || null,
     type: a.type ? String(a.type).slice(0, 40) : null,
