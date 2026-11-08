@@ -7,6 +7,7 @@ const store = {
   del: (k) => { try { localStorage.removeItem(k); } catch (e) { /* idem */ } },
 };
 let state = null, tab = "sel";
+let lbc = {}, lbcSha = null, importNew = []; // détails Leboncoin (data/lbc.json), remplis via le favori « 📥 Suivi immo »
 const pending = { remove: new Set(), ignore: new Set(), star: new Set(), unstar: new Set() };
 
 const eur = (v) => (v ? Math.round(v).toLocaleString("fr-FR") + " €" : "—");
@@ -25,6 +26,55 @@ async function readFile(path) {
   return { sha: j.sha, data: JSON.parse(b64dec(j.content)) };
 }
 
+async function readOpt(path, empty) {
+  try { return await readFile(path); } catch (e) { if (/\(404\)/.test(e.message)) return { sha: null, data: empty }; throw e; }
+}
+async function writeFile(path, sha, data, message) {
+  const body = { message, content: b64enc(JSON.stringify(data) + "\n") };
+  if (sha) body.sha = sha;
+  return fetch(API + store.get("repo") + "/contents/" + path, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
+}
+
+// --- Leboncoin : le favori ouvre cette page avec #lbc=<annonces encodées> ---
+const lbcId = (u) => { const m = /leboncoin\.fr\/.*?(\d{9,12})/.exec(u || ""); return m ? m[1] : null; };
+function decodeLbc(b64) {
+  const s = b64.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(s + "===".slice((s.length + 3) % 4));
+  const ads = JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))));
+  if (!Array.isArray(ads)) throw new Error("format");
+  return ads.filter((a) => a && /^\d{6,14}$/.test(String(a.id))).map((a) => ({
+    id: String(a.id), t: String(a.t || "").slice(0, 200), u: /^https:\/\/www\.leboncoin\.fr\//.test(a.u || "") ? a.u : "",
+    p: +a.p || null, s: +a.s || null, land: +a.land || null, r: +a.r || null, b: +a.b || null,
+    type: a.type ? String(a.type).slice(0, 40) : null,
+    dpe: /^[A-G]$/.test(a.dpe) ? a.dpe : null, ges: /^[A-G]$/.test(a.ges) ? a.ges : null,
+    city: a.city ? String(a.city).slice(0, 80) : null, zip: a.zip ? String(a.zip).slice(0, 10) : null,
+    img: (Array.isArray(a.img) ? a.img : []).filter((x) => /^https:\/\/img\.leboncoin\.fr\//.test(x)).slice(0, 4),
+    d: String(a.d || "").slice(0, 1500), date: /^\d{4}-\d\d-\d\d$/.test(a.date) ? a.date : null, pro: !!a.pro,
+    at: new Date().toISOString().slice(0, 10),
+  }));
+}
+async function importLbc(b64) {
+  let ads;
+  try { ads = decodeLbc(b64); } catch (e) { return say("Lien Leboncoin illisible — reclique sur le favori.", true); }
+  say("Enregistrement de " + ads.length + " annonce(s) Leboncoin…");
+  for (let i = 0; i < 3; i++) {
+    const cur = await readOpt("data/lbc.json", {});
+    const data = cur.data;
+    ads.forEach((a) => { if (data[a.id] && a.p && data[a.id].p && data[a.id].p !== a.p) a.prev = data[a.id].p; data[a.id] = a; });
+    const r = await writeFile("data/lbc.json", cur.sha, data, "Détails Leboncoin (" + ads.length + ")");
+    if (r.ok) {
+      lbc = data; lbcSha = (await r.json()).content.sha;
+      const tracked = new Set(state.listings.map((l) => lbcId(l.url)).filter(Boolean));
+      const known = ads.filter((a) => tracked.has(a.id)).length;
+      importNew = ads.filter((a) => !tracked.has(a.id) && a.u);
+      say(ads.length + " annonce(s) Leboncoin enregistrée(s), dont " + known + " déjà dans ton suivi.");
+      return render();
+    }
+    if (r.status !== 409 && r.status !== 422) return say("Écriture refusée (" + r.status + ") — le jeton a-t-il le droit « Contents : Read and write » ?", true);
+  }
+  say("Conflit d'écriture, reclique sur le favori.", true);
+}
+
 // Ajoute une demande dans inbox.json ; le moteur la traite à son prochain passage (≈1-2 min).
 async function sendAction(kind, value) {
   for (let i = 0; i < 3; i++) {
@@ -40,12 +90,26 @@ async function sendAction(kind, value) {
   throw new Error("Conflit d'écriture, réessaie.");
 }
 
+async function sendMany(kind, values) {
+  for (let i = 0; i < 3; i++) {
+    const { sha, data } = await readFile("data/inbox.json");
+    (data[kind] = data[kind] || []).push(...values);
+    const r = await writeFile("data/inbox.json", sha, data, "Ajout groupé depuis Leboncoin");
+    if (r.ok) return;
+    if (r.status !== 409 && r.status !== 422) throw new Error("Écriture refusée (" + r.status + ")");
+  }
+  throw new Error("Conflit d'écriture, réessaie.");
+}
+
 async function load() {
   say("Chargement…");
   try {
-    state = (await readFile("data/state.json")).data;
+    const [st, lb] = await Promise.all([readFile("data/state.json"), readOpt("data/lbc.json", {})]);
+    state = st.data; lbc = lb.data || {}; lbcSha = lb.sha;
     say("");
     render();
+    const m = /[#&]lbc=([\w-]+)/.exec(location.hash);
+    if (m) { history.replaceState(null, "", location.pathname + location.search); await importLbc(m[1]); }
   } catch (e) { say(e.message, true); }
 }
 
@@ -87,26 +151,59 @@ function act(label, kind, l, extra) {
   });
 }
 
+function lbcBlock(x) {
+  const box = el("div", { className: "lbc" });
+  if (x.img.length) {
+    const g = el("div", { className: "photos" });
+    x.img.forEach((src) => g.append(el("a", { href: src, target: "_blank", rel: "noopener noreferrer" },
+      el("img", { src, alt: "", loading: "lazy", referrerPolicy: "no-referrer" }))));
+    box.append(g);
+  }
+  if (x.d) {
+    const short = x.d.length > 260 ? x.d.slice(0, 260).replace(/\s+\S*$/, "") + "…" : x.d;
+    const p = el("p", { className: "desc", textContent: short });
+    if (short !== x.d) {
+      const more = el("button", { className: "link", textContent: "Lire la suite" });
+      more.onclick = () => { p.textContent = x.d; more.remove(); };
+      box.append(p, more);
+    } else box.append(p);
+  }
+  return box;
+}
+
 function card(l) {
+  const x = lbc[lbcId(l.url)];
+  if (x) {
+    l = { ...l };
+    l.title = l.title && !/^https?:/.test(l.title) && l.status !== "blocked" ? l.title : x.t || l.title;
+    l.price = l.price || x.p; l.surface = l.surface || x.s; l.beds = l.beds || x.b;
+    l.city = l.city || [x.city, x.zip].filter(Boolean).join(" ");
+    if (x.land) l.garden = true;
+    if (/garage/i.test(x.t + " " + x.d)) l.garage = true;
+  }
   const first = l.history && l.history[0] ? l.history[0].p : null;
   const delta = first && l.price && first !== l.price ? (l.price / first - 1) * 100 : null;
   const badges = el("div", { className: "badges" });
-  if (l.status === "blocked") badges.append(badge("site protégé : vérifie à la main", "wa"));
+  if (x) badges.append(badge("infos Leboncoin du " + x.at.split("-").reverse().join("/"), ""));
+  else if (l.status === "blocked") badges.append(badge(lbcId(l.url) ? "site protégé : clique 📥 sur la page Leboncoin" : "site protégé : vérifie à la main", "wa"));
+  if (x && x.dpe) badges.append(badge("DPE " + x.dpe + (x.ges ? " · GES " + x.ges : ""), "AB".includes(x.dpe) ? "ok" : "EFG".includes(x.dpe) ? "ko" : ""));
+  if (x && x.prev && x.p) badges.append(badge((x.p < x.prev ? "baisse" : "hausse") + " Leboncoin : " + eur(x.prev) + " → " + eur(x.p), x.p < x.prev ? "ok" : "ko"));
   if (l.status === "gone") badges.append(badge("disparue", "ko"));
   if (delta !== null) badges.append(badge((delta > 0 ? "+" : "") + delta.toFixed(1) + " % depuis le suivi", delta < 0 ? "ok" : "ko"));
   badges.append(badge(l.garden ? "jardin" : "jardin ?", l.garden ? "ok" : "wa"), badge(l.garage ? "garage" : "garage ?", l.garage ? "ok" : "wa"));
   if (l.dvf) badges.append(badge((l.dvf.ecart_pct > 0 ? "+" : "") + l.dvf.ecart_pct + " % vs ventes réelles (≈ " + eur(l.dvf.estimation) + ")", l.dvf.ecart_pct > 10 ? "ko" : l.dvf.ecart_pct < -5 ? "ok" : ""));
   const pm2 = l.price && l.surface ? Math.round(l.price / l.surface).toLocaleString("fr-FR") + " €/m²" : null;
-  const meta = [l.city, l.surface ? Math.round(l.surface) + " m²" : null, l.beds ? l.beds + " ch." : null, pm2, l.source, "suivie depuis le " + l.added].filter(Boolean).join(" · ");
+  const meta = [l.city, x && x.type, l.surface ? Math.round(l.surface) + " m²" : null, x && x.land ? "terrain " + Math.round(x.land).toLocaleString("fr-FR") + " m²" : null,
+    x && x.r ? x.r + " pièces" : null, l.beds ? l.beds + " ch." : null, pm2, x && x.date ? "publiée le " + x.date.split("-").reverse().join("/") : null, x && x.pro ? "agence" : x ? "particulier" : null, l.source, "suivie depuis le " + l.added].filter(Boolean).join(" · ");
   const actions = el("div", { className: "actions" });
   if (l.starred) actions.append(act("☆ Retirer de ma sélection", "unstar", l));
   else actions.append(act("⭐ Suivre", "star", l), act("Ignorer", "ignore", l));
-  actions.append(act("🗑", "remove", l, "Supprimer définitivement cette annonce du suivi ?"), spark(l.history || []));
+  actions.append(act("🗑", "remove", l, "Supprimer définitivement cette annonce du suivi ?")); const sp = spark(l.history || []); if (sp) actions.append(sp);
   return el("div", { className: "card" + (l.status === "gone" ? " gone" : "") },
     el("div", { className: "top" },
       el("a", { href: safeHref(l.url), target: "_blank", rel: "noopener noreferrer", textContent: l.title || l.url }),
       el("span", { className: "price", textContent: eur(l.price) })),
-    el("div", { className: "meta", textContent: meta }), badges, actions);
+    el("div", { className: "meta", textContent: meta }), badges, x ? lbcBlock(x) : null, actions);
 }
 
 function visible(l) {
@@ -130,6 +227,18 @@ function render() {
   const stat = (t, v) => box.append(el("div", { className: "stat" }, el("small", { textContent: t }), el("b", { textContent: v })));
   if (st) { stat("Prix médian (ma sélection)", eur(st.med)); stat("Prix moyen / m²", eur(st.m2)); stat("Baisses cumulées", eur(st.baisse_cumulee)); }
   if (dv) stat("Ventes réelles / m² (DVF)", eur(dv.median_m2_80_160));
+  const imp = $("#import");
+  imp.replaceChildren();
+  if (importNew.length) {
+    const b = el("button", { className: "primary", textContent: "Ajouter les " + importNew.length + " annonce(s) non suivie(s)" });
+    b.onclick = async () => {
+      b.disabled = true;
+      try { await sendMany("add", importNew.map((a) => a.u)); say(importNew.length + " annonce(s) ajoutée(s) — elles apparaîtront dans « Trouvées » d'ici 1 à 2 minutes, avec leurs détails."); importNew = []; render(); }
+      catch (e) { say(e.message, true); b.disabled = false; }
+    };
+    const no = el("button", { textContent: "Non merci", onclick: () => { importNew = []; render(); } });
+    imp.append(el("p", { className: "meta", textContent: "Cette page Leboncoin contenait aussi des annonces que tu ne suis pas encore :" }), el("div", { className: "row" }, b, no));
+  }
   const list = $("#list");
   list.replaceChildren(...groups[tab].map(card));
   if (!groups[tab].length) list.append(el("p", { className: "meta", textContent: tab === "sel" ? "Aucune annonce suivie : colle un lien ci-dessus ou ⭐ une annonce trouvée." : "Rien ici pour l'instant." }));
@@ -147,6 +256,7 @@ $("#add-form").addEventListener("submit", async (e) => {
 });
 $("#btn-refresh").onclick = () => store.get("token") ? load() : showSetup();
 $("#btn-settings").onclick = showSetup;
+$("#btn-back").onclick = () => (state ? render() : load());
 $("#btn-save").onclick = () => {
   const repo = $("#in-repo").value.trim(), token = $("#in-token").value.trim();
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || token.length < 20) return alert("Dépôt (pseudo/nom) et jeton requis.");
