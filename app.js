@@ -7,7 +7,7 @@ const store = {
   del: (k) => { try { localStorage.removeItem(k); } catch (e) { /* idem */ } },
 };
 let state = null, tab = "sel";
-let lbc = {}, lbcSha = null, importNew = []; // détails Leboncoin (data/lbc.json), remplis via le favori « 📥 Suivi immo »
+let lbc = {}, lbcSha = null, importNew = []; // détails des annonces (data/lbc.json : Leboncoin, Bien'ici, autres sites), remplis via le favori « 📥 Suivi immo »
 const pending = { remove: new Set(), ignore: new Set(), star: new Set(), unstar: new Set() };
 
 const eur = (v) => (v ? Math.round(v).toLocaleString("fr-FR") + " €" : "—");
@@ -35,39 +35,46 @@ async function writeFile(path, sha, data, message) {
   return fetch(API + store.get("repo") + "/contents/" + path, { method: "PUT", headers: headers(), body: JSON.stringify(body) });
 }
 
-// --- Leboncoin : le favori ouvre cette page avec #lbc=<annonces encodées> ---
-const lbcId = (u) => { const m = /leboncoin\.fr\/.*?(\d{9,12})/.exec(u || ""); return m ? m[1] : null; };
+// --- Favori « 📥 Suivi immo » : il ouvre cette page avec #lbc=<annonces encodées> ---
+// Clé d'une annonce : n° Leboncoin, "bi:<id>" pour Bien'ici, "u:<site/chemin>" pour les autres sites.
+const isLbc = (u) => /leboncoin\.fr\//.test(u || "");
+function lbcId(u) {
+  let m = /leboncoin\.fr\/.*?(\d{9,12})/.exec(u || ""); if (m) return m[1];
+  m = /bienici\.com\/annonce\/(?:[^?#]*\/)?([^/?#]+)/.exec(u || ""); if (m) return "bi:" + decodeURIComponent(m[1]);
+  try { const x = new URL(u); return "u:" + x.hostname.replace(/^www\./, "") + x.pathname.replace(/\/$/, ""); } catch (e) { return null; }
+}
 function decodeLbc(b64) {
   const s = b64.replace(/-/g, "+").replace(/_/g, "/");
   const bin = atob(s + "===".slice((s.length + 3) % 4));
   const ads = JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))));
   if (!Array.isArray(ads)) throw new Error("format");
-  return ads.filter((a) => a && /^\d{6,14}$/.test(String(a.id))).map((a) => ({
-    id: String(a.id), t: String(a.t || "").slice(0, 200), u: /^https:\/\/www\.leboncoin\.fr\//.test(a.u || "") ? a.u : "",
+  return ads.filter((a) => a && /^(\d{6,14}|bi:[\w.-]{2,100}|u:[^\s]{3,400})$/.test(String(a.id))).map((a) => ({
+    id: String(a.id), src: String(a.src || "").slice(0, 40), t: String(a.t || "").slice(0, 200), u: /^https:\/\/\S+$/.test(a.u || "") ? a.u : "",
     p: +a.p || null, s: +a.s || null, land: +a.land || null, r: +a.r || null, b: +a.b || null,
     type: a.type ? String(a.type).slice(0, 40) : null,
     dpe: /^[A-G]$/.test(a.dpe) ? a.dpe : null, ges: /^[A-G]$/.test(a.ges) ? a.ges : null,
     city: a.city ? String(a.city).slice(0, 80) : null, zip: a.zip ? String(a.zip).slice(0, 10) : null,
-    img: (Array.isArray(a.img) ? a.img : []).filter((x) => /^https:\/\/img\.leboncoin\.fr\//.test(x)).slice(0, 4),
-    d: String(a.d || "").slice(0, 1500), date: /^\d{4}-\d\d-\d\d$/.test(a.date) ? a.date : null, pro: !!a.pro,
+    img: (Array.isArray(a.img) ? a.img : []).filter((x) => /^https:\/\/\S+$/.test(x || "")).slice(0, 6),
+    d: String(a.d || "").slice(0, 1500), date: /^\d{4}-\d\d-\d\d$/.test(a.date) ? a.date : null, pro: typeof a.pro === "boolean" ? a.pro : null,
+    garden: a.garden === true, year: +a.year || null, heat: a.heat ? String(a.heat).slice(0, 60) : null,
     at: new Date().toISOString().slice(0, 10),
   }));
 }
 async function importLbc(b64) {
   let ads;
-  try { ads = decodeLbc(b64); } catch (e) { return say("Lien Leboncoin illisible — reclique sur le favori.", true); }
-  say("Enregistrement de " + ads.length + " annonce(s) Leboncoin…");
+  try { ads = decodeLbc(b64); } catch (e) { return say("Lien du favori illisible — reclique sur le favori.", true); }
+  say("Enregistrement de " + ads.length + " annonce(s)…");
   for (let i = 0; i < 3; i++) {
     const cur = await readOpt("data/lbc.json", {});
     const data = cur.data;
     ads.forEach((a) => { if (data[a.id] && a.p && data[a.id].p && data[a.id].p !== a.p) a.prev = data[a.id].p; data[a.id] = a; });
-    const r = await writeFile("data/lbc.json", cur.sha, data, "Détails Leboncoin (" + ads.length + ")");
+    const r = await writeFile("data/lbc.json", cur.sha, data, "Détails d'annonces (" + ads.length + ")");
     if (r.ok) {
       lbc = data; lbcSha = (await r.json()).content.sha;
       const tracked = new Set(state.listings.map((l) => lbcId(l.url)).filter(Boolean));
       const known = ads.filter((a) => tracked.has(a.id)).length;
       importNew = ads.filter((a) => !tracked.has(a.id) && a.u);
-      say(ads.length + " annonce(s) Leboncoin enregistrée(s), dont " + known + " déjà dans ton suivi.");
+      say(ads.length + " annonce(s) enregistrée(s) avec leurs détails, dont " + known + " déjà dans ton suivi.");
       return render();
     }
     if (r.status !== 409 && r.status !== 422) return say("Écriture refusée (" + r.status + ") — le jeton a-t-il le droit « Contents : Read and write » ?", true);
@@ -94,7 +101,7 @@ async function sendMany(kind, values) {
   for (let i = 0; i < 3; i++) {
     const { sha, data } = await readFile("data/inbox.json");
     (data[kind] = data[kind] || []).push(...values);
-    const r = await writeFile("data/inbox.json", sha, data, "Ajout groupé depuis Leboncoin");
+    const r = await writeFile("data/inbox.json", sha, data, "Ajout groupé depuis le favori");
     if (r.ok) return;
     if (r.status !== 409 && r.status !== 422) throw new Error("Écriture refusée (" + r.status + ")");
   }
@@ -178,23 +185,23 @@ function card(l) {
     l.title = l.title && !/^https?:/.test(l.title) && l.status !== "blocked" ? l.title : x.t || l.title;
     l.price = l.price || x.p; l.surface = l.surface || x.s; l.beds = l.beds || x.b;
     l.city = l.city || [x.city, x.zip].filter(Boolean).join(" ");
-    if (x.land) l.garden = true;
+    if (x.land || x.garden) l.garden = true;
     if (/garage/i.test(x.t + " " + x.d)) l.garage = true;
   }
   const first = l.history && l.history[0] ? l.history[0].p : null;
   const delta = first && l.price && first !== l.price ? (l.price / first - 1) * 100 : null;
   const badges = el("div", { className: "badges" });
-  if (x) badges.append(badge("infos Leboncoin du " + x.at.split("-").reverse().join("/"), ""));
-  else if (l.status === "blocked") badges.append(badge(lbcId(l.url) ? "site protégé : clique 📥 sur la page Leboncoin" : "site protégé : vérifie à la main", "wa"));
+  if (x) badges.append(badge("infos " + (x.src || "Leboncoin") + " du " + x.at.split("-").reverse().join("/"), ""));
+  else if (l.status === "blocked") badges.append(badge(isLbc(l.url) ? "site protégé : clique 📥 sur la page Leboncoin" : "site protégé : vérifie à la main", "wa"));
   if (x && x.dpe) badges.append(badge("DPE " + x.dpe + (x.ges ? " · GES " + x.ges : ""), "AB".includes(x.dpe) ? "ok" : "EFG".includes(x.dpe) ? "ko" : ""));
-  if (x && x.prev && x.p) badges.append(badge((x.p < x.prev ? "baisse" : "hausse") + " Leboncoin : " + eur(x.prev) + " → " + eur(x.p), x.p < x.prev ? "ok" : "ko"));
+  if (x && x.prev && x.p) badges.append(badge((x.p < x.prev ? "baisse" : "hausse") + " depuis le favori : " + eur(x.prev) + " → " + eur(x.p), x.p < x.prev ? "ok" : "ko"));
   if (l.status === "gone") badges.append(badge("disparue", "ko"));
   if (delta !== null) badges.append(badge((delta > 0 ? "+" : "") + delta.toFixed(1) + " % depuis le suivi", delta < 0 ? "ok" : "ko"));
   badges.append(badge(l.garden ? "jardin" : "jardin ?", l.garden ? "ok" : "wa"), badge(l.garage ? "garage" : "garage ?", l.garage ? "ok" : "wa"));
   if (l.dvf) badges.append(badge((l.dvf.ecart_pct > 0 ? "+" : "") + l.dvf.ecart_pct + " % vs ventes réelles (≈ " + eur(l.dvf.estimation) + ")", l.dvf.ecart_pct > 10 ? "ko" : l.dvf.ecart_pct < -5 ? "ok" : ""));
   const pm2 = l.price && l.surface ? Math.round(l.price / l.surface).toLocaleString("fr-FR") + " €/m²" : null;
   const meta = [l.city, x && x.type, l.surface ? Math.round(l.surface) + " m²" : null, x && x.land ? "terrain " + Math.round(x.land).toLocaleString("fr-FR") + " m²" : null,
-    x && x.r ? x.r + " pièces" : null, l.beds ? l.beds + " ch." : null, pm2, x && x.date ? "publiée le " + x.date.split("-").reverse().join("/") : null, x && x.pro ? "agence" : x ? "particulier" : null, l.source, "suivie depuis le " + l.added].filter(Boolean).join(" · ");
+    x && x.r ? x.r + " pièces" : null, l.beds ? l.beds + " ch." : null, pm2, x && x.date ? "publiée le " + x.date.split("-").reverse().join("/") : null, x && x.pro === true ? "agence" : x && x.pro === false ? "particulier" : null, x && x.year ? "construite en " + x.year : null, x && x.heat ? "chauffage " + x.heat : null, l.source, "suivie depuis le " + l.added].filter(Boolean).join(" · ");
   const actions = el("div", { className: "actions" });
   if (l.starred) actions.append(act("☆ Retirer de ma sélection", "unstar", l));
   else actions.append(act("⭐ Suivre", "star", l), act("Ignorer", "ignore", l));
@@ -237,7 +244,7 @@ function render() {
       catch (e) { say(e.message, true); b.disabled = false; }
     };
     const no = el("button", { textContent: "Non merci", onclick: () => { importNew = []; render(); } });
-    imp.append(el("p", { className: "meta", textContent: "Cette page Leboncoin contenait aussi des annonces que tu ne suis pas encore :" }), el("div", { className: "row" }, b, no));
+    imp.append(el("p", { className: "meta", textContent: "Cette page contenait aussi des annonces que tu ne suis pas encore :" }), el("div", { className: "row" }, b, no));
   }
   const list = $("#list");
   list.replaceChildren(...groups[tab].map(card));
@@ -266,3 +273,11 @@ $("#btn-forget").onclick = () => { store.del("repo"); store.del("token"); state 
 function showSetup() { $("#app").hidden = true; $("#setup").hidden = false; $("#in-repo").value = store.get("repo"); }
 
 if (store.get("repo") && store.get("token")) load(); else showSetup();
+// Si l'onglet Suivi immo est déjà ouvert, le favori ne change que le #lbc=… : on l'importe sans recharger.
+window.addEventListener("hashchange", () => {
+  const m = /[#&]lbc=([\w-]+)/.exec(location.hash);
+  if (!m) return;
+  if (!state) return load(); // load() lit et nettoie lui-même le #lbc=…
+  history.replaceState(null, "", location.pathname + location.search);
+  importLbc(m[1]);
+});
