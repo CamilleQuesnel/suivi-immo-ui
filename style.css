@@ -39,4 +39,11 @@ nav b{font-weight:600;opacity:.8}
 .actions button{font-size:13px;padding:4px 10px}
 svg.spark{margin-left:auto}
 #foot{color:var(--mut);font-size:12px;text-align:center}
+.lbc{margin:6px 0}
+.photos{display:flex;gap:6px;overflow-x:auto;margin:6px 0}
+.photos img{height:96px;width:auto;border-radius:8px;display:block;background:var(--bd)}
+.desc{font-size:13px;margin:4px 0;white-space:pre-line}
+button.link{border:0;background:none;padding:0;color:var(--ac);font-size:13px}
+a.bookmarklet{display:inline-block;padding:8px 14px;border-radius:8px;background:var(--ac);color:#fff;text-decoration:none;font-weight:600;cursor:grab}
+#import .row{flex-wrap:wrap}
 [hidden]{display:none!important}
