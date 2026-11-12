@@ -10,6 +10,8 @@ let state = null, tab = "sel";
 let lbc = {}, lbcSha = null, importNew = []; // détails des annonces (data/lbc.json : Leboncoin, Bien'ici, autres sites), remplis via le favori « 📥 Suivi immo »
 const pending = { remove: new Set(), ignore: new Set(), star: new Set(), unstar: new Set() };
 const pendingAddr = new Map();
+const pendingNote = new Map();
+const NOTE_MAX = 20000;
 
 const eur = (v) => (v ? Math.round(v).toLocaleString("fr-FR") + " €" : "—");
 const say = (t, err) => { const m = $("#msg"); m.textContent = t || ""; m.className = err ? "err" : ""; };
@@ -184,6 +186,44 @@ function lbcBlock(x) {
   return box;
 }
 
+// Note libre : clic pour écrire, ✓ (ou Ctrl+Entrée) pour valider, Échap pour annuler.
+function noteBlock(l) {
+  const box = el("div", { className: "note" });
+  const show = () => {
+    box.replaceChildren(el("div", {
+      className: "note-text" + (l.note ? "" : " empty"), tabIndex: 0, title: "Cliquer pour modifier",
+      textContent: l.note || "＋ Ajouter une note",
+      onclick: edit, onkeydown: (e) => { if (e.key === "Enter") edit(); },
+    }));
+  };
+  const edit = () => {
+    const ta = el("textarea", { className: "note-input", value: l.note || "", rows: 3, placeholder: "Ma note…" });
+    const grow = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+    const ok = el("button", { className: "note-ok", textContent: "✓", title: "Valider (Ctrl+Entrée)" });
+    const save = async () => {
+      const v = ta.value.slice(0, NOTE_MAX).trimEnd();
+      if (v === (l.note || "")) return show();
+      ok.disabled = true;
+      try {
+        await sendAction("note", { id: l.id, note: v });
+        pendingNote.set(l.id, v); l.note = v;
+        say("Note enregistrée.");
+        show();
+      } catch (e) { say(e.message, true); ok.disabled = false; }
+    };
+    ok.onclick = save;
+    ta.oninput = grow;
+    ta.onkeydown = (e) => {
+      if (e.key === "Escape") show();
+      else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); }
+    };
+    box.replaceChildren(ta, el("div", { className: "note-bar" }, ok));
+    ta.focus(); grow();
+  };
+  show();
+  return box;
+}
+
 function card(l) {
   const x = lbc[lbcId(l.url)];
   if (x) {
@@ -238,7 +278,7 @@ function card(l) {
     el("div", { className: "top" },
       el("a", { href: safeHref(l.url), target: "_blank", rel: "noopener noreferrer", textContent: l.title || l.url }),
       el("span", { className: "price", textContent: eur(l.price) })),
-    el("div", { className: "meta", textContent: meta }), maps, badges, x ? lbcBlock(x) : null, actions);
+    el("div", { className: "meta", textContent: meta }), maps, badges, x ? lbcBlock(x) : null, noteBlock(l), actions);
 }
 
 function visible(l) {
@@ -251,7 +291,8 @@ function isStarred(l) {
 function render() {
   $("#setup").hidden = true; $("#app").hidden = false;
   const all = state.listings.filter(visible).map((l) => ({
-    ...l, starred: isStarred(l), address: pendingAddr.has(l.id) ? pendingAddr.get(l.id) : l.address }));
+    ...l, starred: isStarred(l), address: pendingAddr.has(l.id) ? pendingAddr.get(l.id) : l.address,
+    note: pendingNote.has(l.id) ? pendingNote.get(l.id) : l.note }));
   const groups = {
     sel: all.filter((l) => l.starred && l.status !== "gone"),
     new: all.filter((l) => !l.starred && l.status !== "gone"),
