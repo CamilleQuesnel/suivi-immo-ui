@@ -122,6 +122,10 @@ async function load() {
   } catch (e) { say(e.message, true); }
 }
 
+// Lien de partage Google Maps collé tel quel (sinon l'adresse est cherchée comme du texte)
+function isMapsLink(s) {
+  return /^https:\/\/(maps\.app\.goo\.gl|goo\.gl\/maps|(www\.)?google\.[a-z.]+\/maps|maps\.google\.[a-z.]+)(\/|$|\?)/i.test(s || "");
+}
 function safeHref(u) { return /^https:\/\//.test(u || "") ? u : "#"; }
 function el(tag, props, ...kids) {
   const n = document.createElement(tag);
@@ -210,12 +214,12 @@ function card(l) {
   actions.append(el("button", {
     textContent: l.address ? "📍 Modifier" : "📍 Adresse",
     onclick: async (ev) => {
-      const v = prompt("Adresse du bien (vide pour l'effacer) :", l.address || "");
+      const v = prompt("Adresse du bien, ou lien Google Maps (vide pour l'effacer) :", l.address || "");
       if (v === null) return;
       ev.target.disabled = true;
       try {
-        await sendAction("address", { id: l.id, address: v.trim().slice(0, 200) });
-        pendingAddr.set(l.id, v.trim().slice(0, 200));
+        await sendAction("address", { id: l.id, address: v.trim().slice(0, 500) });
+        pendingAddr.set(l.id, v.trim().slice(0, 500));
         say("Adresse enregistrée.");
         render();
       } catch (e) { say(e.message, true); ev.target.disabled = false; }
@@ -224,9 +228,11 @@ function card(l) {
   actions.append(act("🗑", "remove", l, "Supprimer définitivement cette annonce du suivi ?"));
   const sp = spark(l.history || []);
   if (sp) actions.append(sp);
+  const isLink = isMapsLink(l.address);
   const maps = l.address ? el("div", { className: "meta" }, el("a", {
-    href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(l.address),
-    target: "_blank", rel: "noopener noreferrer", textContent: "📍 " + l.address + " — voir sur Google Maps",
+    href: isLink ? l.address : "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(l.address),
+    target: "_blank", rel: "noopener noreferrer",
+    textContent: isLink ? "📍 Voir sur Google Maps" : "📍 " + l.address + " — voir sur Google Maps",
   })) : null;
   return el("div", { className: "card" + (l.status === "gone" ? " gone" : "") },
     el("div", { className: "top" },
