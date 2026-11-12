@@ -46,6 +46,8 @@ svg.spark{margin-left:auto}
 button.link{border:0;background:none;padding:0;color:var(--ac);font-size:13px}
 a.bookmarklet{display:inline-block;padding:8px 14px;border-radius:8px;background:var(--ac);color:#fff;text-decoration:none;font-weight:600;cursor:grab}
 #import .row{flex-wrap:wrap}
+.sortbar{margin:0 0 6px;font-size:13px;color:var(--mut)}
+.sortbar select{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:4px 8px;margin-left:4px}
 .note{margin:8px 0 2px}
 .note-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;padding:6px 8px;border-radius:8px;border:1px dashed transparent;cursor:text}
 .note-text:hover,.note-text:focus{border-color:var(--bd);outline:none}

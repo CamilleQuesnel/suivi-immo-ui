@@ -240,6 +240,7 @@ function card(l) {
   if (x) badges.append(badge("infos " + (x.src || "Leboncoin") + " du " + x.at.split("-").reverse().join("/"), ""));
   else if (l.status === "blocked") badges.append(badge(isLbc(l.url) ? "site protégé : clique 📥 sur la page Leboncoin" : "site protégé : vérifie à la main", "wa"));
   if (x && x.dpe) badges.append(badge("DPE " + x.dpe + (x.ges ? " · GES " + x.ges : ""), "AB".includes(x.dpe) ? "ok" : "EFG".includes(x.dpe) ? "ko" : ""));
+  if (!(x && x.dpe) && l.dpe) badges.append(badge("DPE " + l.dpe, "AB".includes(l.dpe) ? "ok" : "EFG".includes(l.dpe) ? "ko" : ""));
   if (x && x.prev && x.p) badges.append(badge((x.p < x.prev ? "baisse" : "hausse") + " depuis le favori : " + eur(x.prev) + " → " + eur(x.p), x.p < x.prev ? "ok" : "ko"));
   if (l.status === "gone") badges.append(badge("disparue", "ko"));
   if (delta !== null) badges.append(badge((delta > 0 ? "+" : "") + delta.toFixed(1) + " % depuis le suivi", delta < 0 ? "ok" : "ko"));
@@ -317,11 +318,44 @@ function render() {
     imp.append(el("p", { className: "meta", textContent: "Cette page contenait aussi des annonces que tu ne suis pas encore :" }), el("div", { className: "row" }, b, no));
   }
   const list = $("#list");
-  list.replaceChildren(...groups[tab].map(card));
+  list.replaceChildren(...sorted(groups[tab]).map(card));
   if (!groups[tab].length) list.append(el("p", { className: "meta", textContent: tab === "sel" ? "Aucune annonce suivie : colle un lien ci-dessus ou ⭐ une annonce trouvée." : "Rien ici pour l'instant." }));
   $("#foot").textContent = "Dernière mise à jour des données : " + (state.last_run || "jamais");
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
 }
+
+// ---- tri : les valeurs inconnues (pas de DPE, pas de surface…) vont toujours en fin de liste ----
+const extra = (l) => lbc[lbcId(l.url)] || {};
+const dpeOf = (l) => l.dpe || extra(l).dpe || null;
+const SORTS = {
+  price_desc: ["Prix décroissant", (l) => l.price || extra(l).p, -1],
+  price_asc: ["Prix croissant", (l) => l.price || extra(l).p, 1],
+  pm2_asc: ["Prix au m² croissant", (l) => { const s = l.surface || extra(l).s, p = l.price || extra(l).p; return s && p ? p / s : null; }, 1],
+  surf_desc: ["Surface décroissante", (l) => l.surface || extra(l).s, -1],
+  surf_asc: ["Surface croissante", (l) => l.surface || extra(l).s, 1],
+  dpe_best: ["DPE : meilleur d'abord (A→G)", (l) => { const d = dpeOf(l); return d && "ABCDEFG".includes(d) ? "ABCDEFG".indexOf(d) : null; }, 1],
+  dpe_worst: ["DPE : pire d'abord (G→A)", (l) => { const d = dpeOf(l); return d && "ABCDEFG".includes(d) ? "ABCDEFG".indexOf(d) : null; }, -1],
+  added_desc: ["Ajoutée récemment", (l) => l.added || null, -1],
+  added_asc: ["Ajoutée il y a longtemps", (l) => l.added || null, 1],
+};
+let sortKey = SORTS[store.get("sort")] ? store.get("sort") : "price_desc";
+function sorted(arr) {
+  const [, key, dir] = SORTS[sortKey];
+  return [...arr].sort((a, b) => {
+    const x = key(a), y = key(b);
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    return x === y ? (b.price || 0) - (a.price || 0) : (x < y ? -1 : 1) * dir;
+  });
+}
+(() => {
+  const sel = el("select", { className: "sort", title: "Trier la liste" });
+  Object.entries(SORTS).forEach(([k, v]) => sel.append(el("option", { value: k, textContent: v[0] })));
+  sel.value = sortKey;
+  sel.onchange = () => { sortKey = sel.value; store.set("sort", sortKey); if (state) render(); };
+  $("#tabs").after(el("div", { className: "sortbar" }, el("label", {}, "Trier par ", sel)));
+})();
 
 $("#tabs").addEventListener("click", (e) => { const t = e.target.closest("button"); if (t) { tab = t.dataset.tab; render(); } });
 $("#add-form").addEventListener("submit", async (e) => {
