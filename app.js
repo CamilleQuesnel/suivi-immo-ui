@@ -9,6 +9,7 @@ const store = {
 let state = null, tab = "sel";
 let lbc = {}, lbcSha = null, importNew = []; // détails des annonces (data/lbc.json : Leboncoin, Bien'ici, autres sites), remplis via le favori « 📥 Suivi immo »
 const pending = { remove: new Set(), ignore: new Set(), star: new Set(), unstar: new Set() };
+const pendingAddr = new Map();
 
 const eur = (v) => (v ? Math.round(v).toLocaleString("fr-FR") + " €" : "—");
 const say = (t, err) => { const m = $("#msg"); m.textContent = t || ""; m.className = err ? "err" : ""; };
@@ -206,12 +207,32 @@ function card(l) {
   const actions = el("div", { className: "actions" });
   if (l.starred) actions.append(act("☆ Retirer de ma sélection", "unstar", l));
   else actions.append(act("⭐ Suivre", "star", l), act("Ignorer", "ignore", l));
-  actions.append(act("🗑", "remove", l, "Supprimer définitivement cette annonce du suivi ?")); const sp = spark(l.history || []); if (sp) actions.append(sp);
+  actions.append(el("button", {
+    textContent: l.address ? "📍 Modifier" : "📍 Adresse",
+    onclick: async (ev) => {
+      const v = prompt("Adresse du bien (vide pour l'effacer) :", l.address || "");
+      if (v === null) return;
+      ev.target.disabled = true;
+      try {
+        await sendAction("address", { id: l.id, address: v.trim().slice(0, 200) });
+        pendingAddr.set(l.id, v.trim().slice(0, 200));
+        say("Adresse enregistrée.");
+        render();
+      } catch (e) { say(e.message, true); ev.target.disabled = false; }
+    },
+  }));
+  actions.append(act("🗑", "remove", l, "Supprimer définitivement cette annonce du suivi ?"));
+  const sp = spark(l.history || []);
+  if (sp) actions.append(sp);
+  const maps = l.address ? el("div", { className: "meta" }, el("a", {
+    href: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(l.address),
+    target: "_blank", rel: "noopener noreferrer", textContent: "📍 " + l.address + " — voir sur Google Maps",
+  })) : null;
   return el("div", { className: "card" + (l.status === "gone" ? " gone" : "") },
     el("div", { className: "top" },
       el("a", { href: safeHref(l.url), target: "_blank", rel: "noopener noreferrer", textContent: l.title || l.url }),
       el("span", { className: "price", textContent: eur(l.price) })),
-    el("div", { className: "meta", textContent: meta }), badges, x ? lbcBlock(x) : null, actions);
+    el("div", { className: "meta", textContent: meta }), maps, badges, x ? lbcBlock(x) : null, actions);
 }
 
 function visible(l) {
@@ -223,7 +244,8 @@ function isStarred(l) {
 
 function render() {
   $("#setup").hidden = true; $("#app").hidden = false;
-  const all = state.listings.filter(visible).map((l) => ({ ...l, starred: isStarred(l) }));
+  const all = state.listings.filter(visible).map((l) => ({
+    ...l, starred: isStarred(l), address: pendingAddr.has(l.id) ? pendingAddr.get(l.id) : l.address }));
   const groups = {
     sel: all.filter((l) => l.starred && l.status !== "gone"),
     new: all.filter((l) => !l.starred && l.status !== "gone"),
